@@ -13,15 +13,17 @@ from urllib.parse import urljoin
 class GlueError(Exception):
     pass
 
-# Set up logger
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
 
 # Create argparser
 parser = argparse.ArgumentParser(description='Run a glue process between MISP and MISP-Modules')
 parser.add_argument("-c", "--config", default="misp-glue.yaml", help="Config file location")
+parser.add_argument("-v", "--verbose", default=False, action="store_true")
 
 args = parser.parse_args()
+
+# Set up logger
+logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+log = logging.getLogger(__name__)
 
 log.debug("Parsed arguments")
 
@@ -59,6 +61,9 @@ modulesURL = "http://{}:{}".format(config["misp"]["modules"]["host"],
 
 modules = requests.get(urljoin(modulesURL, "modules")).json()
 configModules = config["misp"]["modules"]["run-modules"]
+
+api = pymisp.PyMISP(config["misp"]["url"], config["misp"]["apikey"])
+
 while True:
     # Wait for something to come in on the ZMQ socket
     message = socket.recv().decode("utf-8")[10:]
@@ -87,13 +92,17 @@ while True:
 
         for mod in modules:
             # First check if the type is right
-            if "input" in mod["mispattributes"] and type_ in mod["mispattributes"]["input"]:
-                # Then check if the user is OK with running it
-                if configModules == ["ALL"] or mod["name"] in configModules:
-                    allowedModules.append(mod) 
+            if "expansion" in mod["meta"].get("module-type", []):
+                if "input" in mod["mispattributes"] and type_ in mod["mispattributes"]["input"]:
+                    # Then check if the user is OK with running it
+                    if configModules == ["ALL"] or mod["name"] in configModules:
+                        allowedModules.append(mod) 
     
         # Run all the modules
+        log.debug("Allowed Modules %s", [x["name"] for x in allowedModules])
+
         for mod in allowedModules:
+            log.info("Running %s", mod)
             # Run the module 
             payload = {
                 "module": mod["name"],
@@ -108,5 +117,18 @@ while True:
             req = requests.post(urljoin(modulesURL, "query"), data=json.dumps(payload))
 
             output = req.json()
-    
-            print(output)
+        
+            log.debug("RECV %s", output)
+        
+            if "error" not in output:
+                for result in output["results"]:
+                    for value in result["values"]:
+                        log.debug("Adding %s:%s", result["types"][0], value)
+                        ev.add_attribute(result["types"][0], value)
+            else:
+                log.fatal(output["error"])
+
+            log.debug("Sending event update")
+            api.update_event(ev.id, ev)            
+
+            log.debug("OK")
