@@ -1,0 +1,7 @@
+zmq:
+  host: 127.0.0.1
+  port: 50000
+
+misp:
+  url: http://my-misp.com
+  apikey: DEADBEEF  
