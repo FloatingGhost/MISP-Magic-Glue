@@ -5,3 +5,14 @@ zmq:
 misp:
   url: http://my-misp.com
   apikey: DEADBEEF  
+
+  modules:
+    host: 127.0.0.1
+    port: 6666
+    run-modules:
+      - "ALL"
+
+additional-config:
+    circl_passivedns:
+      username: something
+      password: something

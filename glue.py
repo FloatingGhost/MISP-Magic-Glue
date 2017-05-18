@@ -7,6 +7,8 @@ import warnings
 from pyaml import yaml
 import logging
 import argparse
+import requests
+from urllib.parse import urljoin
 
 class GlueError(Exception):
     pass
@@ -16,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 # Create argparser
-parser = argparse.ArgumentParser(description='Process some integers.')
+parser = argparse.ArgumentParser(description='Run a glue process between MISP and MISP-Modules')
 parser.add_argument("-c", "--config", default="misp-glue.yaml", help="Config file location")
 
 args = parser.parse_args()
@@ -49,6 +51,14 @@ socket.connect("tcp://{}:{}".format(
 # Set the option to subscribe
 socket.setsockopt_string(zmq.SUBSCRIBE, '')
 
+# Get MISP-Modules mod list
+log.info("Connecting to Modules server at http://%s:%s", config["misp"]["modules"]["host"],
+                                                         config["misp"]["modules"]["port"])
+modulesURL = "http://{}:{}".format(config["misp"]["modules"]["host"],
+                                   config["misp"]["modules"]["port"])
+
+modules = requests.get(urljoin(modulesURL, "modules")).json()
+configModules = config["misp"]["modules"]["run-modules"]
 while True:
     # Wait for something to come in on the ZMQ socket
     message = socket.recv().decode("utf-8")[10:]
@@ -65,3 +75,38 @@ while True:
     ev = pymisp.mispevent.MISPEvent()
     ev.load(msg)
 
+    # For each attribute in the event
+    for attrib in ev.attributes:
+
+        # Extract the type and value
+        type_ = attrib.type
+        value = attrib.value
+    
+        # Figure out what we can run with this type
+        allowedModules = []
+
+        for mod in modules:
+            # First check if the type is right
+            if "input" in mod["mispattributes"] and type_ in mod["mispattributes"]["input"]:
+                # Then check if the user is OK with running it
+                if configModules == ["ALL"] or mod["name"] in configModules:
+                    allowedModules.append(mod) 
+    
+        # Run all the modules
+        for mod in allowedModules:
+            # Run the module 
+            payload = {
+                "module": mod["name"],
+                type_ : value
+            }
+
+            # Extract any additional config
+            if mod["name"] in config.get("additional-config", []):
+                payload["config"] = config["additional-config"][mod["name"]]
+
+            # Send off the request
+            req = requests.post(urljoin(modulesURL, "query"), data=json.dumps(payload))
+
+            output = req.json()
+    
+            print(output)
